@@ -1,8 +1,0 @@
-
-PLAY [Baseline for every server (packages, AWS CLI, CloudWatch agent, auto security updates)] ***
-
-TASK [Gathering Facts] *********************************************************
-ok: [jenkins-server]
-ok: [k8s-node]
-
-TASK [Wait for cloud-init to finish] *******************************************

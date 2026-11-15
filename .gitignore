@@ -3,3 +3,4 @@ ansible/inventory/hosts.ini
 *.pem
 .env
 .DS_Store
+*.log
