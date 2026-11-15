@@ -1,0 +1,3 @@
+# Force LF everywhere: CRLF breaks shell scripts and the sh steps in the Jenkinsfile.
+* text=auto eol=lf
+*.png binary
