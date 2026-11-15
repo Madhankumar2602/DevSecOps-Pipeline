@@ -79,6 +79,36 @@ resource "aws_cloudwatch_log_metric_filter" "app_errors" {
   }
 }
 
+# ---------- Pipeline health (Jenkinsfile post{} -> scripts/pipeline_metric.sh) ----------
+resource "aws_cloudwatch_metric_alarm" "pipeline_failed" {
+  alarm_name          = "${var.project}-pipeline-failed"
+  alarm_description   = "A Jenkins build failed: a security gate blocked it or the deploy broke"
+  namespace           = "ShipGuard/Pipeline"
+  metric_name         = "BuildFailed"
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  alarm_actions       = [aws_sns_topic.alerts.arn]
+  ok_actions          = [aws_sns_topic.alerts.arn]
+  treat_missing_data  = "notBreaching"
+}
+
+resource "aws_cloudwatch_metric_alarm" "app_errors" {
+  alarm_name          = "${var.project}-app-errors"
+  alarm_description   = "The app wrote more than 10 errors in 5 minutes"
+  namespace           = "ShipGuard"
+  metric_name         = "AppErrors"
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 10
+  comparison_operator = "GreaterThanThreshold"
+  alarm_actions       = [aws_sns_topic.alerts.arn]
+  treat_missing_data  = "notBreaching"
+}
+
 # ---------- Dashboard ----------
 resource "aws_cloudwatch_dashboard" "main" {
   dashboard_name = var.project
@@ -121,6 +151,27 @@ resource "aws_cloudwatch_dashboard" "main" {
           region = var.aws_region
           query  = "SOURCE '${aws_cloudwatch_log_group.app["app"].name}' | fields @timestamp, @message | sort @timestamp desc | limit 50"
           view   = "table"
+        }
+      },
+      {
+        type = "metric", x = 0, y = 12, width = 12, height = 6
+        properties = {
+          title   = "Pipeline builds (passed vs blocked)"
+          region  = var.aws_region
+          stat    = "Sum"
+          period  = 3600
+          view    = "bar"
+          metrics = [["ShipGuard/Pipeline", "BuildSucceeded", { label = "passed", color = "#2ca02c" }], ["ShipGuard/Pipeline", "BuildFailed", { label = "blocked/failed", color = "#d62728" }]]
+        }
+      },
+      {
+        type = "metric", x = 12, y = 12, width = 12, height = 6
+        properties = {
+          title   = "Pipeline duration (seconds)"
+          region  = var.aws_region
+          stat    = "Average"
+          period  = 3600
+          metrics = [["ShipGuard/Pipeline", "BuildDuration"]]
         }
       }
     ]

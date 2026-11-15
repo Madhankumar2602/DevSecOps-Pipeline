@@ -1,0 +1,7 @@
+# Copy to backend.hcl (git-ignored) after running bootstrap.
+# `terraform -chdir=bootstrap output -raw backend_hcl > backend.hcl` writes it for you.
+bucket       = "shipguard-tfstate-<your-account-id>"
+key          = "shipguard/terraform.tfstate"
+region       = "us-east-1"
+encrypt      = true
+use_lockfile = true

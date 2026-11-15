@@ -40,6 +40,7 @@ pipeline {
           env.IMAGE_TAG = "${env.BUILD_NUMBER}-${env.SHORT_SHA}"
           env.IMAGE     = "${env.ECR_REPOSITORY_URL}:${env.IMAGE_TAG}"
           env.SONAR_QG  = 'NOT_RUN'
+          env.BUILD_START_MS = "${currentBuild.startTimeInMillis}"
         }
         sh 'rm -rf "$REPORTS" && mkdir -p "$REPORTS" && chmod 777 "$REPORTS"'
         echo "Building ${env.IMAGE}"
@@ -97,9 +98,11 @@ pipeline {
               # JSON report of everything (never fails) ...
               docker run --rm -u "$(id -u):$(id -g)" -v "$WORKSPACE:/src" "$TFSEC_IMG" /src/terraform \
                 --no-color --soft-fail --format json --out /src/reports/tfsec.json
-              # ... then the gate: any HIGH or CRITICAL fails the build
-              docker run --rm -u "$(id -u):$(id -g)" -v "$WORKSPACE:/src" "$TFSEC_IMG" /src/terraform \
-                --no-color --minimum-severity HIGH
+              # ... then the gate: any HIGH or CRITICAL fails the build (main stack + state bootstrap)
+              for dir in terraform terraform/bootstrap; do
+                docker run --rm -u "$(id -u):$(id -g)" -v "$WORKSPACE:/src" "$TFSEC_IMG" "/src/$dir" \
+                  --no-color --minimum-severity HIGH
+              done
             '''
           }
         }
@@ -131,9 +134,8 @@ pipeline {
       steps {
         sh '''
           trivy image --quiet --scanners vuln --format json --output "$REPORTS/trivy-image.json" "$IMAGE"
-          trivy image --quiet --skip-db-update --severity HIGH,CRITICAL "$IMAGE"
-          # The gate: any CRITICAL CVE that has a fix available fails the build
-          trivy image --quiet --skip-db-update --severity CRITICAL --ignore-unfixed \
+          # The gate: any HIGH or CRITICAL CVE that has a fix available fails the build
+          trivy image --quiet --skip-db-update --severity HIGH,CRITICAL --ignore-unfixed \
             --ignorefile security/.trivyignore --exit-code 1 "$IMAGE"
         '''
       }
@@ -186,14 +188,14 @@ pipeline {
         sh '''
           python3 scripts/scan_summary.py --reports "$REPORTS" --build "$BUILD_NUMBER" \
             --commit "$GIT_COMMIT" --sonar "$SONAR_QG" --out "$REPORTS/scan-summary.json"
-          scripts/deploy.sh
+          bash scripts/deploy.sh
         '''
       }
     }
 
     stage('Smoke test') {
       steps {
-        sh 'scripts/smoke_test.sh'
+        sh 'bash scripts/smoke_test.sh'
       }
     }
   }
@@ -211,9 +213,12 @@ pipeline {
       '''
     }
     success {
+      sh 'bash scripts/pipeline_metric.sh 0'
       echo "All gates passed — ${env.IMAGE_DIGEST_REF} is live at http://${env.K8S_PUBLIC_IP}:30080"
     }
     failure {
+      // BuildFailed=1 triggers the "<project>-pipeline-failed" CloudWatch alarm -> SNS email
+      sh 'bash scripts/pipeline_metric.sh 1'
       echo 'A security gate or deployment step failed. Nothing new was deployed. Check the stage logs and reports/.'
     }
   }

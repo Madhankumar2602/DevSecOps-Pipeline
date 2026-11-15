@@ -1,14 +1,14 @@
 resource "aws_security_group" "jenkins" {
-  name        = "${var.project}-jenkins"
   #checkov:skip=CKV2_AWS_5:Attached to aws_instance.node["jenkins"] via for_each (graph check cannot resolve it)
+  name        = "${var.project}-jenkins"
   description = "Jenkins + SonarQube CI server"
   vpc_id      = aws_vpc.main.id
   tags        = { Name = "${var.project}-jenkins-sg" }
 }
 
 resource "aws_security_group" "k8s" {
-  name        = "${var.project}-k8s"
   #checkov:skip=CKV2_AWS_5:Attached to aws_instance.node["k8s"] via for_each (graph check cannot resolve it)
+  name        = "${var.project}-k8s"
   description = "Single-node k3s cluster"
   vpc_id      = aws_vpc.main.id
   tags        = { Name = "${var.project}-k8s-sg" }

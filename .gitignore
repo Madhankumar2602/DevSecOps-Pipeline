@@ -3,5 +3,3 @@ ansible/inventory/hosts.ini
 *.pem
 .env
 .DS_Store
-*.zip
-aws/

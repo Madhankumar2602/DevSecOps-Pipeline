@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.6.0"
+  required_version = ">= 1.10.0" # S3 lock files (use_lockfile)
 
   required_providers {
     aws = {
@@ -12,14 +12,10 @@ terraform {
     }
   }
 
-  # Optional: remote state. Create the bucket once (see README step 3), then uncomment.
-  # backend "s3" {
-  #   bucket       = "shipguard-tfstate-<your-account-id>"
-  #   key          = "shipguard/terraform.tfstate"
-  #   region       = "ap-south-1"
-  #   encrypt      = true
-  #   use_lockfile = true
-  # }
+  # Remote state in S3 (bucket created once by bootstrap, see README Step 4).
+  # Values come from backend.hcl:  terraform init -backend-config=backend.hcl
+  # Locking uses an S3 lock file (use_lockfile), so no DynamoDB table is needed.
+  backend "s3" {}
 }
 
 provider "aws" {
