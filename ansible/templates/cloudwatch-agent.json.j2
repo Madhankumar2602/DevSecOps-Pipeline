@@ -1,0 +1,29 @@
+{
+  "agent": { "metrics_collection_interval": 60, "run_as_user": "root" },
+  "metrics": {
+    "namespace": "CWAgent",
+    "append_dimensions": { "InstanceId": "${aws:InstanceId}" },
+    "metrics_collected": {
+      "mem":  { "measurement": ["mem_used_percent"] },
+      "disk": { "measurement": ["used_percent"], "resources": ["/"] },
+      "swap": { "measurement": ["swap_used_percent"] }
+    }
+  },
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          { "file_path": "/var/log/syslog",  "log_group_name": "/{{ project }}/system", "log_stream_name": "{instance_id}-{{ inventory_hostname }}-syslog" },
+{% if inventory_hostname in groups['jenkins'] %}
+          { "file_path": "/var/lib/jenkins/jobs/*/builds/*/log", "log_group_name": "/{{ project }}/jenkins", "log_stream_name": "{instance_id}-builds" },
+{% endif %}
+{% if inventory_hostname in groups['k8s'] %}
+          { "file_path": "/var/log/containers/shipguard-*_shipguard_*.log", "log_group_name": "/{{ project }}/app", "log_stream_name": "{instance_id}-shipguard" },
+          { "file_path": "/var/log/ecr-refresh.log", "log_group_name": "/{{ project }}/system", "log_stream_name": "{instance_id}-ecr-refresh" },
+{% endif %}
+          { "file_path": "/var/log/auth.log", "log_group_name": "/{{ project }}/system", "log_stream_name": "{instance_id}-{{ inventory_hostname }}-auth" }
+        ]
+      }
+    }
+  }
+}

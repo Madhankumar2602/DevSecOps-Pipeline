@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is git-ignored.
+my_ip_cidr          = "203.0.113.10/32" # curl -s https://checkip.amazonaws.com  (then add /32)
+alert_email         = "you@example.com"
+owner               = "your-name"
+ssh_public_key_path = "~/.ssh/shipguard.pub"
+
+# ---- AWS Academy Learner Lab ($50 credit) -> keep these lines ----
+# Learner Lab only allows us-east-1 / us-west-2 and blocks creating IAM roles.
+learner_lab       = true
+aws_region        = "us-east-1"
+availability_zone = "us-east-1a"
+
+# ---- Your own AWS account -> delete the 3 lines above (defaults: Mumbai, own IAM roles) ----

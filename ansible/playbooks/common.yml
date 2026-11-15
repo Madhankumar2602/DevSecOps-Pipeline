@@ -1,0 +1,60 @@
+- name: Baseline for every server (packages, AWS CLI, CloudWatch agent, auto security updates)
+  hosts: all
+  become: true
+  tasks:
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+
+    - name: Install base packages
+      ansible.builtin.apt:
+        name: [curl, unzip, jq, git, ca-certificates, gnupg, python3, unattended-upgrades]
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Enable unattended security upgrades
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+        mode: "0644"
+
+    # ---------- AWS CLI v2 ----------
+    - name: Download AWS CLI v2
+      ansible.builtin.get_url:
+        url: https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
+        dest: /tmp/awscliv2.zip
+        mode: "0644"
+      when: not ansible_check_mode
+
+    - name: Unpack AWS CLI
+      ansible.builtin.unarchive:
+        src: /tmp/awscliv2.zip
+        dest: /tmp
+        remote_src: true
+        creates: /tmp/aws/install
+
+    - name: Install AWS CLI
+      ansible.builtin.command: /tmp/aws/install --update
+      args:
+        creates: /usr/local/bin/aws
+
+    # ---------- CloudWatch agent ----------
+    - name: Install CloudWatch agent
+      ansible.builtin.apt:
+        deb: https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb
+
+    - name: CloudWatch agent config
+      ansible.builtin.template:
+        src: ../templates/cloudwatch-agent.json.j2
+        dest: /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+        mode: "0644"
+      register: cwconf
+
+    - name: Start CloudWatch agent with config
+      ansible.builtin.command: >
+        /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl
+        -a fetch-config -m ec2 -s
+        -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+      when: cwconf.changed

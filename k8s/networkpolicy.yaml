@@ -1,0 +1,24 @@
+# Default-deny everything in the namespace, then allow only HTTP into the app.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: shipguard
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-http-in
+  namespace: shipguard
+spec:
+  podSelector:
+    matchLabels:
+      app: shipguard
+  policyTypes: ["Ingress"]
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 3000

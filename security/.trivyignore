@@ -1,0 +1,2 @@
+# Accepted CVEs go here, one per line, each with a reason and an expiry date, e.g.:
+# CVE-2024-00000  # not reachable: we never call the vulnerable function. Review by 2026-12-31

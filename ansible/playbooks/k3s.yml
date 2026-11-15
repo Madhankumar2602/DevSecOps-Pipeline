@@ -1,0 +1,48 @@
+- name: Single-node Kubernetes (k3s)
+  hosts: k8s
+  become: true
+  tasks:
+    - name: Install k3s
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="server \
+          --tls-san {{ private_ip }} \
+          --disable traefik \
+          --secrets-encryption \
+          --write-kubeconfig-mode 600" sh -
+      args:
+        executable: /bin/bash
+        creates: /usr/local/bin/k3s
+
+    - name: Wait for the API server
+      ansible.builtin.wait_for:
+        port: 6443
+        timeout: 180
+
+    - name: Wait for node Ready
+      ansible.builtin.command: k3s kubectl wait --for=condition=Ready node --all --timeout=180s
+      changed_when: false
+
+    - name: Read kubeconfig (handed to Jenkins in the next play)
+      ansible.builtin.slurp:
+        src: /etc/rancher/k3s/k3s.yaml
+      register: kubeconfig_raw
+      no_log: true
+
+    - name: Keep kubeconfig as a host fact
+      ansible.builtin.set_fact:
+        kubeconfig_b64: "{{ kubeconfig_raw.content }}"
+      no_log: true
+
+    - name: ECR pull-secret refresher script
+      ansible.builtin.template:
+        src: ../templates/ecr-refresh.sh.j2
+        dest: /usr/local/bin/ecr-refresh.sh
+        mode: "0750"
+
+    - name: Refresh ECR pull secret every 6 hours (tokens expire after 12h)
+      ansible.builtin.cron:
+        name: ecr-pull-secret
+        minute: "0"
+        hour: "*/6"
+        job: /usr/local/bin/ecr-refresh.sh >> /var/log/ecr-refresh.log 2>&1

@@ -1,0 +1,211 @@
+- name: Jenkins CI server with SonarQube, Docker, Trivy and kubectl
+  hosts: jenkins
+  become: true
+  vars:
+    k8s_host: "{{ groups['k8s'][0] }}"
+    plugin_manager_version: "2.13.2"
+    jenkins_plugins:
+      - workflow-aggregator
+      - git
+      - github
+      - pipeline-stage-view
+      - pipeline-utility-steps
+      - sonar
+      - htmlpublisher
+      - timestamper
+      - ws-cleanup
+      - credentials-binding
+  tasks:
+    # ---------- kernel settings SonarQube's Elasticsearch needs ----------
+    - name: SonarQube sysctl settings
+      ansible.posix.sysctl:
+        name: "{{ item.key }}"
+        value: "{{ item.value }}"
+        sysctl_set: true
+      loop:
+        - { key: vm.max_map_count, value: "524288" }
+        - { key: fs.file-max, value: "131072" }
+
+    # ---------- Docker ----------
+    - name: Docker apt key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+
+    - name: Docker repo
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        filename: docker
+
+    - name: Install Docker
+      ansible.builtin.apt:
+        name: [docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin, amazon-ecr-credential-helper]
+        update_cache: true
+
+    # ---------- Jenkins ----------
+    - name: Install Java 21
+      ansible.builtin.apt:
+        name: [fontconfig, openjdk-21-jre-headless]
+
+    - name: Jenkins apt key
+      ansible.builtin.get_url:
+        url: https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key
+        dest: /etc/apt/keyrings/jenkins-keyring.asc
+        mode: "0644"
+
+    - name: Jenkins repo
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/"
+        filename: jenkins
+
+    - name: Install Jenkins
+      ansible.builtin.apt:
+        name: jenkins
+        update_cache: true
+
+    - name: Let Jenkins run Docker
+      ansible.builtin.user:
+        name: jenkins
+        groups: docker
+        append: true
+      notify: Restart Jenkins
+
+    # ---------- Trivy ----------
+    - name: Trivy apt key
+      ansible.builtin.get_url:
+        url: https://aquasecurity.github.io/trivy-repo/deb/public.key
+        dest: /etc/apt/keyrings/trivy.asc
+        mode: "0644"
+
+    - name: Trivy repo
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/trivy.asc] https://aquasecurity.github.io/trivy-repo/deb generic main"
+        filename: trivy
+
+    - name: Install Trivy
+      ansible.builtin.apt:
+        name: trivy
+        update_cache: true
+
+    # ---------- kubectl ----------
+    - name: Look up latest stable kubectl
+      ansible.builtin.uri:
+        url: https://dl.k8s.io/release/stable.txt
+        return_content: true
+      register: kubectl_version
+
+    - name: Install kubectl
+      ansible.builtin.get_url:
+        url: "https://dl.k8s.io/release/{{ kubectl_version.content | trim }}/bin/linux/amd64/kubectl"
+        dest: /usr/local/bin/kubectl
+        mode: "0755"
+
+    # ---------- credentials & config for the jenkins user ----------
+    - name: Jenkins config directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: jenkins
+        group: jenkins
+        mode: "0700"
+      loop: [/var/lib/jenkins/.kube, /var/lib/jenkins/.docker]
+
+    - name: kubeconfig pointing at the k3s node's private IP
+      ansible.builtin.copy:
+        dest: /var/lib/jenkins/.kube/config
+        content: "{{ hostvars[k8s_host].kubeconfig_b64 | b64decode | replace('127.0.0.1', k8s_private_ip) }}"
+        owner: jenkins
+        group: jenkins
+        mode: "0600"
+      no_log: true
+
+    - name: Docker uses the ECR credential helper (instance role, no stored keys)
+      ansible.builtin.copy:
+        dest: /var/lib/jenkins/.docker/config.json
+        content: '{ "credHelpers": { "{{ ecr_registry }}": "ecr-login" } }'
+        owner: jenkins
+        group: jenkins
+        mode: "0600"
+
+    - name: Settings directory
+      ansible.builtin.file:
+        path: /etc/shipguard
+        state: directory
+        mode: "0755"
+
+    - name: Pipeline settings read by the Jenkinsfile (from Terraform outputs)
+      ansible.builtin.template:
+        src: ../templates/pipeline.env.j2
+        dest: /etc/shipguard/pipeline.env
+        mode: "0644"
+
+    # ---------- Jenkins plugins ----------
+    - name: Download Jenkins plugin manager
+      ansible.builtin.get_url:
+        url: "https://github.com/jenkinsci/plugin-installation-manager-tool/releases/download/{{ plugin_manager_version }}/jenkins-plugin-manager-{{ plugin_manager_version }}.jar"
+        dest: /opt/jenkins-plugin-manager.jar
+        mode: "0644"
+
+    - name: Install pipeline plugins
+      ansible.builtin.command: >
+        java -jar /opt/jenkins-plugin-manager.jar
+        --war /usr/share/java/jenkins.war
+        --plugin-download-directory /var/lib/jenkins/plugins
+        --plugins {{ jenkins_plugins | join(' ') }}
+      become_user: jenkins
+      register: plugins
+      changed_when: "'Downloaded' in plugins.stdout or 'Done' in plugins.stdout"
+      notify: Restart Jenkins
+
+    # ---------- SonarQube ----------
+    - name: Run SonarQube (Community) in Docker
+      ansible.builtin.shell: |
+        if ! docker ps -a --format '{{ '{{' }}.Names{{ '}}' }}' | grep -qx sonarqube; then
+          docker run -d --name sonarqube --restart unless-stopped -p 9000:9000 \
+            -v sonarqube_data:/opt/sonarqube/data \
+            -v sonarqube_extensions:/opt/sonarqube/extensions \
+            -v sonarqube_logs:/opt/sonarqube/logs \
+            sonarqube:community
+          echo started
+        fi
+      register: sonar
+      changed_when: "'started' in sonar.stdout"
+
+    - name: Pre-pull scanner images so the first build is fast
+      ansible.builtin.command: "docker pull {{ item }}"
+      loop:
+        - zricethezav/gitleaks:latest
+        - aquasec/tfsec:latest
+        - bridgecrew/checkov:latest
+        - sonarsource/sonar-scanner-cli:latest
+        - ghcr.io/zaproxy/zaproxy:stable
+        - node:24-alpine
+      changed_when: false
+
+    - name: Flush handlers (restart Jenkins if needed)
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for Jenkins
+      ansible.builtin.wait_for:
+        port: 8080
+        timeout: 300
+
+    - name: Read initial admin password
+      ansible.builtin.slurp:
+        src: /var/lib/jenkins/secrets/initialAdminPassword
+      register: jenkins_pw
+      failed_when: false
+
+    - name: Next steps
+      ansible.builtin.debug:
+        msg:
+          - "Jenkins:   http://{{ ansible_host }}:8080   initial admin password: {{ (jenkins_pw.content | default('') | b64decode | trim) or 'already set up' }}"
+          - "SonarQube: http://{{ ansible_host }}:9000   (admin / admin, you'll be asked to change it)"
+          - "SonarQube webhook URL: http://{{ private_ip }}:8080/sonarqube-webhook/"
+
+  handlers:
+    - name: Restart Jenkins
+      ansible.builtin.service:
+        name: jenkins
+        state: restarted

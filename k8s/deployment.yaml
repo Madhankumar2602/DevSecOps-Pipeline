@@ -1,0 +1,95 @@
+# The image line and *_VALUE placeholders are substituted by the Jenkinsfile.
+# The image is pinned by digest (repo@sha256:...) so what was scanned is exactly what runs.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shipguard
+  namespace: shipguard
+  labels:
+    app: shipguard
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: shipguard
+  template:
+    metadata:
+      labels:
+        app: shipguard
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: ecr-pull
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: shipguard
+          # Replaced at deploy time with <ecr-repo>@sha256:<digest>
+          image: placeholder/shipguard@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: APP_ENV
+              value: production
+            - name: BUILD_NUMBER
+              value: "BUILD_NUMBER_VALUE"
+            - name: GIT_COMMIT
+              value: "GIT_COMMIT_VALUE"
+            - name: IMAGE_TAG
+              value: "IMAGE_TAG_VALUE"
+            - name: DEPLOYED_AT
+              value: "DEPLOYED_AT_VALUE"
+            - name: SCAN_SUMMARY_PATH
+              value: /config/scan-summary.json
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 192Mi
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: scan-summary
+              mountPath: /config
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: scan-summary
+          configMap:
+            name: scan-summary
+            optional: true
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi

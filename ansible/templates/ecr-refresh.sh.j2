@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Refreshes the ECR image-pull secret using this node's IAM role. Installed by Ansible.
+set -euo pipefail
+export PATH=/usr/local/bin:$PATH
+NS=shipguard
+k3s kubectl get namespace "$NS" >/dev/null 2>&1 || exit 0   # Jenkins creates it on first deploy
+k3s kubectl -n "$NS" create secret docker-registry ecr-pull \
+  --docker-server={{ ecr_registry }} --docker-username=AWS \
+  --docker-password="$(aws ecr get-login-password --region {{ aws_region }})" \
+  --dry-run=client -o yaml | k3s kubectl apply -f -
+echo "$(date -Is) ecr-pull secret refreshed"
