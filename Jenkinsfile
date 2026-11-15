@@ -115,7 +115,7 @@ pipeline {
               docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$WORKSPACE:/src" "$CHECKOV_IMG" \
                 -d /src/terraform -d /src/k8s --framework terraform kubernetes \
                 --skip-download --compact --quiet \
-                -o cli -o json --output-file-path console,/src/reports
+                -o cli -o json --output-file-path console,/src/reports/results_json.json
             '''
           }
         }
