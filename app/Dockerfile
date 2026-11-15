@@ -5,7 +5,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 
 # ---------- runtime stage: minimal, non-root ----------
-FROM node:16-alpine
+FROM node:24-alpine
 # Pull the latest Alpine security patches so Trivy stays clean
 RUN apk upgrade --no-cache && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 ENV NODE_ENV=production PORT=3000
