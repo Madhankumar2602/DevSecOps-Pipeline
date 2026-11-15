@@ -3,7 +3,6 @@ FROM node:24-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
-RUN npm install --no-save --ignore-scripts lodash@4.17.4
 
 # ---------- runtime stage: minimal, non-root ----------
 FROM node:24-alpine
