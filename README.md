@@ -196,7 +196,7 @@ What it does:
 - **k8s:** installs k3s with secrets encryption, then a cron job that refreshes the ECR pull secret every 6 hours
 - **jenkins:** Docker, Java 21, Jenkins and its plugins, Trivy, kubectl, SonarQube (Docker), the kubeconfig for the cluster, the ECR credential helper (it uses the instance role, so no AWS keys are stored), and `/etc/shipguard/pipeline.env`
 
-At the end it prints the **Jenkins initial admin password** and the **SonarQube webhook URL**. Copy both.
+At the end it prints the **Jenkins initial admin password**. Copy it.
 
 ## Step 6: Set up SonarQube
 
@@ -204,7 +204,7 @@ Open `http://<jenkins-ip>:9000`. It takes about 2 minutes to start the first tim
 
 1. Log in `admin` / `admin` and set a new password.
 2. **My Account (top-right) → Security → Generate token.** Name: `jenkins`, Type: *Global Analysis Token*. **Copy it.**
-3. **Administration → Configuration → Webhooks → Create.** Name: `jenkins`. URL: `http://<jenkins-PRIVATE-ip>:8080/sonarqube-webhook/` (Ansible printed it). This is how Jenkins learns the Quality Gate result.
+3. No webhook is needed. The scanner waits for the Quality Gate itself (`sonar.qualitygate.wait=true`). Recent SonarQube versions also refuse webhooks to private IPs or to their own host, and here SonarQube and Jenkins share one server.
 
 ## Step 7: Set up Jenkins
 
@@ -317,7 +317,8 @@ ECR images and S3 reports are deleted too (`force_delete` / `force_destroy` are 
 | `AccessDenied` on `kms:CreateKey` (Learner Lab) | Your lab blocks customer-managed KMS keys. Ask your instructor, or tell me and I'll switch the project to AWS-managed encryption. |
 | `ansible all -m ping` times out | Your IP changed. Update `my_ip_cidr`, run `terraform apply`. |
 | SonarQube container keeps restarting | `docker logs sonarqube`. Usually `vm.max_map_count`; re-run the jenkins playbook. |
-| Quality Gate stage hangs, then times out | The SonarQube webhook is missing or wrong (Step 6.3). It must use the Jenkins **private** IP and end with `/sonarqube-webhook/`. |
+| SonarQube stage fails with `401` / `Not authorized` | The `sonar-token` credential is wrong or was revoked. Generate a new Global Analysis Token and update the credential. |
+| SonarQube stage says `QUALITY GATE STATUS: FAILED` | The gate is working. Open the ShipGuard project in SonarQube to see which condition failed. |
 | `permission denied ... docker.sock` | Jenkins wasn't restarted after joining the `docker` group: `sudo systemctl restart jenkins`. |
 | `cat: /etc/shipguard/pipeline.env: No such file` | Re-run `ansible-playbook playbooks/site.yml`. |
 | Pods stuck in `ImagePullBackOff` | ECR secret expired. Run `sudo /usr/local/bin/ecr-refresh.sh` on the k8s node. |

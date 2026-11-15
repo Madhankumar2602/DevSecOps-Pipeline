@@ -69,21 +69,22 @@ pipeline {
 
     stage('Gate 1 · Code quality (SonarQube)') {
       steps {
+        // The scanner itself waits for the Quality Gate (sonar.qualitygate.wait) and exits non-zero
+        // if it fails, so no SonarQube -> Jenkins webhook is needed. (SonarQube blocks webhooks to
+        // private IPs and to its own host, and here SonarQube and Jenkins share one server.)
         withSonarQubeEnv('sonarqube') {
-          sh '''
-            docker run --rm --network host -u "$(id -u):$(id -g)" \
-              -e SONAR_HOST_URL="$SONAR_HOST_URL" -e SONAR_TOKEN="$SONAR_AUTH_TOKEN" \
-              -e SONAR_USER_HOME=/usr/src/.sonar \
-              -v "$WORKSPACE/app:/usr/src" "$SCANNER_IMG" \
-              -Dsonar.projectVersion="$IMAGE_TAG"
-          '''
-        }
-        timeout(time: 5, unit: 'MINUTES') {
           script {
-            def qg = waitForQualityGate abortPipeline: false
-            env.SONAR_QG = qg.status
-            if (qg.status != 'OK') {
-              error "SonarQube Quality Gate failed: ${qg.status}"
+            def rc = sh(returnStatus: true, script: '''
+              docker run --rm --network host -u "$(id -u):$(id -g)" \
+                -e SONAR_HOST_URL="$SONAR_HOST_URL" -e SONAR_TOKEN="$SONAR_AUTH_TOKEN" \
+                -e SONAR_USER_HOME=/usr/src/.sonar \
+                -v "$WORKSPACE/app:/usr/src" "$SCANNER_IMG" \
+                -Dsonar.projectVersion="$IMAGE_TAG" \
+                -Dsonar.qualitygate.wait=true -Dsonar.qualitygate.timeout=300
+            ''')
+            env.SONAR_QG = (rc == 0) ? 'OK' : 'ERROR'
+            if (rc != 0) {
+              error 'SonarQube Quality Gate failed (or the analysis failed). See the scanner output above and the ShipGuard project in SonarQube.'
             }
           }
         }

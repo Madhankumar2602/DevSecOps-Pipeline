@@ -203,7 +203,6 @@
         msg:
           - "Jenkins:   http://{{ ansible_host }}:8080   initial admin password: {{ (jenkins_pw.content | default('') | b64decode | trim) or 'already set up' }}"
           - "SonarQube: http://{{ ansible_host }}:9000   (admin / admin, you'll be asked to change it)"
-          - "SonarQube webhook URL: http://{{ private_ip }}:8080/sonarqube-webhook/"
 
   handlers:
     - name: Restart Jenkins

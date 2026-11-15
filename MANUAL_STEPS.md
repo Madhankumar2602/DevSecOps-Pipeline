@@ -22,7 +22,7 @@ The full walkthrough for each step is in [README.md](README.md).
 | 6 | `terraform -chdir=bootstrap init && terraform -chdir=bootstrap apply`, then `terraform -chdir=bootstrap output -raw backend_hcl > backend.hcl` (run from `terraform/`) | Creates the S3 state bucket. It's run once, from your laptop, with your credentials |
 | 7 | `terraform init -backend-config=backend.hcl && terraform plan -out tfplan && terraform apply tfplan` (**Learner Lab: add `-refresh=false` to `plan`**, because the lab blocks an S3 read the provider needs; see README Troubleshooting) | **Read the plan** before you apply it, because this spends money |
 | 8 | **Click "Confirm subscription"** in the AWS SNS email | AWS requires a person to opt in. **Without this you get no alarm emails** |
-| 9 | `cd ansible && ansible-galaxy collection install -r requirements.yml && ansible-playbook playbooks/site.yml`. **Copy the Jenkins password and SonarQube webhook URL** it prints at the end | Uses your SSH key |
+| 9 | `cd ansible && ansible-galaxy collection install -r requirements.yml && ansible-playbook playbooks/site.yml`. **Copy the Jenkins password** it prints at the end | Uses your SSH key |
 
 ## C. SonarQube UI, `http://<jenkins-ip>:9000` (once)
 
@@ -30,7 +30,7 @@ The full walkthrough for each step is in [README.md](README.md).
 |---|---|
 | 10 | Log in `admin`/`admin` and **set a new password** |
 | 11 | *My Account → Security → Generate token*, type **Global Analysis Token**, then copy it |
-| 12 | *Administration → Configuration → Webhooks → Create*. URL = `http://<jenkins-PRIVATE-ip>:8080/sonarqube-webhook/` (Ansible printed it). **Without this, the Quality Gate stage hangs and then times out** |
+| 12 | **No webhook needed.** The scanner waits for the Quality Gate itself. Paste the token only into the Jenkins credential, never into chats or files |
 
 ## D. Jenkins UI, `http://<jenkins-ip>:8080` (once)
 
