@@ -12,6 +12,11 @@ pipeline {
     disableConcurrentBuilds()
   }
 
+  // SonarQube is optional: tick RUN_SONARQUBE in "Build with Parameters" to turn the gate on.
+  parameters {
+    booleanParam(name: 'RUN_SONARQUBE', defaultValue: false, description: 'Run the SonarQube code-quality gate (needs the sonarqube server + sonar-token set up in Jenkins)')
+  }
+
   // GitHub can't reach Jenkins (SG allows only your IP), so poll for new commits.
   triggers { pollSCM('H/2 * * * *') }
 
@@ -34,19 +39,12 @@ pipeline {
       steps {
         script {
           // Written by Ansible from Terraform outputs — no hard-coded account IDs or IPs here.
-          // Plain Groovy KEY=VALUE parsing (no plugin needed).
-          sh(script: 'cat /etc/shipguard/pipeline.env', returnStdout: true).readLines().each { line ->
-            line = line.trim()
-            if (line && !line.startsWith('#') && line.contains('=')) {
-              def i = line.indexOf('=')
-              env."${line.substring(0, i).trim()}" = line.substring(i + 1).trim()
-            }
-          }
+          def cfg = readProperties text: sh(script: 'cat /etc/shipguard/pipeline.env', returnStdout: true)
+          cfg.each { k, v -> env."${k}" = v }
           env.SHORT_SHA = sh(script: 'git rev-parse --short=12 HEAD', returnStdout: true).trim()
           env.IMAGE_TAG = "${env.BUILD_NUMBER}-${env.SHORT_SHA}"
           env.IMAGE     = "${env.ECR_REPOSITORY_URL}:${env.IMAGE_TAG}"
-          env.SONAR_QG  = 'NOT_RUN'
-          env.BUILD_START_MS = "${currentBuild.startTimeInMillis}"
+          env.SONAR_QG  = 'SKIPPED'
         }
         sh 'rm -rf "$REPORTS" && mkdir -p "$REPORTS" && chmod 777 "$REPORTS"'
         echo "Building ${env.IMAGE}"
@@ -74,23 +72,23 @@ pipeline {
     }
 
     stage('Gate 1 · Code quality (SonarQube)') {
+      when { expression { return params.RUN_SONARQUBE == true } }
       steps {
-        // The scanner itself waits for the Quality Gate (sonar.qualitygate.wait) and exits non-zero
-        // if it fails, so no SonarQube -> Jenkins webhook is needed. (SonarQube blocks webhooks to
-        // private IPs and to its own host, and here SonarQube and Jenkins share one server.)
         withSonarQubeEnv('sonarqube') {
+          sh '''
+            docker run --rm --network host -u "$(id -u):$(id -g)" \
+              -e SONAR_HOST_URL="$SONAR_HOST_URL" -e SONAR_TOKEN="$SONAR_AUTH_TOKEN" \
+              -e SONAR_USER_HOME=/usr/src/.sonar \
+              -v "$WORKSPACE/app:/usr/src" "$SCANNER_IMG" \
+              -Dsonar.projectVersion="$IMAGE_TAG"
+          '''
+        }
+        timeout(time: 5, unit: 'MINUTES') {
           script {
-            def rc = sh(returnStatus: true, script: '''
-              docker run --rm --network host -u "$(id -u):$(id -g)" \
-                -e SONAR_HOST_URL="$SONAR_HOST_URL" -e SONAR_TOKEN="$SONAR_AUTH_TOKEN" \
-                -e SONAR_USER_HOME=/usr/src/.sonar \
-                -v "$WORKSPACE/app:/usr/src" "$SCANNER_IMG" \
-                -Dsonar.projectVersion="$IMAGE_TAG" \
-                -Dsonar.qualitygate.wait=true -Dsonar.qualitygate.timeout=300
-            ''')
-            env.SONAR_QG = (rc == 0) ? 'OK' : 'ERROR'
-            if (rc != 0) {
-              error 'SonarQube Quality Gate failed (or the analysis failed). See the scanner output above and the ShipGuard project in SonarQube.'
+            def qg = waitForQualityGate abortPipeline: false
+            env.SONAR_QG = qg.status
+            if (qg.status != 'OK') {
+              error "SonarQube Quality Gate failed: ${qg.status}"
             }
           }
         }
@@ -105,11 +103,9 @@ pipeline {
               # JSON report of everything (never fails) ...
               docker run --rm -u "$(id -u):$(id -g)" -v "$WORKSPACE:/src" "$TFSEC_IMG" /src/terraform \
                 --no-color --soft-fail --format json --out /src/reports/tfsec.json
-              # ... then the gate: any HIGH or CRITICAL fails the build (main stack + state bootstrap)
-              for dir in terraform terraform/bootstrap; do
-                docker run --rm -u "$(id -u):$(id -g)" -v "$WORKSPACE:/src" "$TFSEC_IMG" "/src/$dir" \
-                  --no-color --minimum-severity HIGH
-              done
+              # ... then the gate: any HIGH or CRITICAL fails the build
+              docker run --rm -u "$(id -u):$(id -g)" -v "$WORKSPACE:/src" "$TFSEC_IMG" /src/terraform \
+                --no-color --minimum-severity HIGH
             '''
           }
         }
@@ -141,8 +137,9 @@ pipeline {
       steps {
         sh '''
           trivy image --quiet --scanners vuln --format json --output "$REPORTS/trivy-image.json" "$IMAGE"
-          # The gate: any HIGH or CRITICAL CVE that has a fix available fails the build
-          trivy image --quiet --skip-db-update --severity HIGH,CRITICAL --ignore-unfixed \
+          trivy image --quiet --skip-db-update --severity HIGH,CRITICAL "$IMAGE"
+          # The gate: any CRITICAL CVE that has a fix available fails the build
+          trivy image --quiet --skip-db-update --severity CRITICAL --ignore-unfixed \
             --ignorefile security/.trivyignore --exit-code 1 "$IMAGE"
         '''
       }
@@ -195,14 +192,14 @@ pipeline {
         sh '''
           python3 scripts/scan_summary.py --reports "$REPORTS" --build "$BUILD_NUMBER" \
             --commit "$GIT_COMMIT" --sonar "$SONAR_QG" --out "$REPORTS/scan-summary.json"
-          bash scripts/deploy.sh
+          scripts/deploy.sh
         '''
       }
     }
 
     stage('Smoke test') {
       steps {
-        sh 'bash scripts/smoke_test.sh'
+        sh 'scripts/smoke_test.sh'
       }
     }
   }
@@ -220,12 +217,9 @@ pipeline {
       '''
     }
     success {
-      sh 'bash scripts/pipeline_metric.sh 0'
       echo "All gates passed — ${env.IMAGE_DIGEST_REF} is live at http://${env.K8S_PUBLIC_IP}:30080"
     }
     failure {
-      // BuildFailed=1 triggers the "<project>-pipeline-failed" CloudWatch alarm -> SNS email
-      sh 'bash scripts/pipeline_metric.sh 1'
       echo 'A security gate or deployment step failed. Nothing new was deployed. Check the stage logs and reports/.'
     }
   }

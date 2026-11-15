@@ -49,7 +49,11 @@ function gateResult(key, s) {
   if (!s || s.source === 'none') return { text: key === 'deploy' ? 'running' : 'run in pipeline', warn: false };
   switch (key) {
     case 'secrets': return { text: `${s.gitleaks?.leaks ?? 0} leaks` };
-    case 'sonar': return { text: `gate ${String(s.sonar?.qualityGate || 'OK').toLowerCase()}` };
+    case 'sonar': {
+      const qg = String(s.sonar?.qualityGate || 'OK').toUpperCase();
+      if (qg === 'SKIPPED' || qg === 'NOT_RUN' || qg === 'UNKNOWN') return { text: 'skipped (optional)', skip: true };
+      return { text: `gate ${qg.toLowerCase()}` };
+    }
     case 'iac': return { text: `${s.iac?.failedHighCritical ?? 0} high/crit` };
     case 'trivy': {
       const t = s.trivy || {};
@@ -68,8 +72,8 @@ function renderGates(summary) {
   const track = $('track');
   track.innerHTML = GATES.map((g, i) => {
     const r = gateResult(g.key, summary);
-    return `<li class="gate${r.warn ? ' warn' : ''}" data-i="${i}">
-      <span class="lamp">${r.warn ? '!' : '✓'}</span>
+    return `<li class="gate${r.warn ? ' warn' : ''}${r.skip ? ' skip' : ''}" data-i="${i}">
+      <span class="lamp">${r.skip ? '–' : r.warn ? '!' : '✓'}</span>
       <div class="gate-card">
         <h3>${esc(g.name)}</h3>
         <span class="tool">${esc(g.tool)}</span>

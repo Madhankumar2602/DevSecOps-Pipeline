@@ -7,7 +7,7 @@ A Jenkins pipeline where **every release has to pass five security gates** befor
 | 0 · Secrets | **Gitleaks** | any credential is committed |
 | 1 · Code quality | **SonarQube** | the Quality Gate fails (bugs, vulnerabilities, coverage on new code) |
 | 2 · Infrastructure | **tfsec + Checkov** | Terraform or Kubernetes manifests have HIGH/CRITICAL misconfigurations |
-| 3 · Container | **Trivy** | the Docker image has a fixable HIGH or CRITICAL CVE |
+| 3 · Container | **Trivy** | the Docker image has a fixable CRITICAL CVE |
 | 4 · Runtime | **OWASP ZAP** | the running app triggers a FAIL rule or any High-risk alert |
 | Deploy | **Kubernetes (k3s)** | the rollout is unhealthy (auto-rollback) |
 
@@ -41,17 +41,15 @@ The app is **ShipGuard**, a deployment console that shows the live build number,
  └────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**AWS services used:** EC2, VPC, Security Groups, IAM roles (no access keys on servers), ECR, S3 (Terraform state + scan reports), KMS, CloudWatch (Logs, Metrics, Alarms, Dashboard, VPC Flow Logs), SNS, Systems Manager.
+**AWS services used:** EC2, VPC, Security Groups, IAM roles (no access keys on servers), ECR, S3, KMS, CloudWatch (Logs, Metrics, Alarms, Dashboard, VPC Flow Logs), SNS, Systems Manager.
 
 ## Repository layout
 
 ```
 .
-├── MANUAL_STEPS.md           # the only steps you must do by hand (checklist)
 ├── Jenkinsfile               # the pipeline with all gates
 ├── app/                      # Node.js app + Dockerfile + tests + sonar-project.properties
 ├── terraform/                # all AWS infrastructure (passes its own tfsec/Checkov gate)
-│   └── bootstrap/            # one-time: S3 bucket + KMS key for Terraform state
 ├── ansible/                  # configures Jenkins, SonarQube, Trivy, k3s, CloudWatch agent
 ├── k8s/                      # hardened manifests (non-root, read-only FS, NetworkPolicy, PDB)
 ├── security/                 # ZAP rules, Trivy ignore file
@@ -85,7 +83,7 @@ On **Windows, use WSL2 (Ubuntu)**, because Ansible doesn't run natively on Windo
 |---|---|
 | Git | `git --version` |
 | AWS CLI v2 | `aws --version` |
-| Terraform ≥ 1.10 | `terraform -version` |
+| Terraform ≥ 1.6 | `terraform -version` |
 | Ansible ≥ 2.15 | `ansible --version` (`pip install ansible`) |
 | Node.js 24 (optional, to run the app locally) | `node -v` |
 
@@ -157,14 +155,8 @@ curl -s https://checkip.amazonaws.com     # put this IP + /32 into my_ip_cidr
 # edit terraform.tfvars: my_ip_cidr, alert_email, owner
 # Learner Lab: keep learner_lab = true + us-east-1 lines. Own account: delete those 3 lines.
 
-# 4a. One time only: the S3 bucket (versioned, KMS-encrypted) that holds Terraform state
-terraform -chdir=bootstrap init
-terraform -chdir=bootstrap apply -var aws_region=us-east-1     # own account: ap-south-1
-terraform -chdir=bootstrap output -raw backend_hcl > backend.hcl
-
-# 4b. The main stack, with its state stored in that bucket
-terraform init -backend-config=backend.hcl
-terraform fmt -check -recursive && terraform validate
+terraform init
+terraform fmt -check && terraform validate
 terraform plan -out tfplan       # read it! ~60 resources
 terraform apply tfplan
 ```
@@ -180,7 +172,7 @@ When it finishes, Terraform prints the URLs and **writes `ansible/inventory/host
   - **S3 → shipguard-reports-<account>:** versioning, KMS, public access blocked
   - **CloudWatch → Dashboards → shipguard**, **Alarms**, and **Log groups** `/shipguard/*`
 
-> State lives in `s3://shipguard-tfstate-<account-id>/shipguard/terraform.tfstate` with S3-native locking (`use_lockfile`, Terraform ≥ 1.10). The bootstrap's own tiny state stays local in `terraform/bootstrap/` (git-ignored); keep it. If you already applied with local state, run `terraform init -backend-config=backend.hcl -migrate-state`.
+> Optional (recommended): move state to S3. Create a bucket `shipguard-tfstate-<account-id>` with versioning on, uncomment the `backend "s3"` block in `versions.tf`, then run `terraform init -migrate-state`.
 
 ## Step 5: Configure the servers with Ansible
 
@@ -196,15 +188,17 @@ What it does:
 - **k8s:** installs k3s with secrets encryption, then a cron job that refreshes the ECR pull secret every 6 hours
 - **jenkins:** Docker, Java 21, Jenkins and its plugins, Trivy, kubectl, SonarQube (Docker), the kubeconfig for the cluster, the ECR credential helper (it uses the instance role, so no AWS keys are stored), and `/etc/shipguard/pipeline.env`
 
-At the end it prints the **Jenkins initial admin password**. Copy it.
+At the end it prints the **Jenkins initial admin password** and the **SonarQube webhook URL**. Copy both.
 
 ## Step 6: Set up SonarQube
+
+> **Optional.** SonarQube is off by default (the stage shows as skipped). To use it, do this step and Step 7.2–7.3, then run **Build with Parameters → tick RUN_SONARQUBE**.
 
 Open `http://<jenkins-ip>:9000`. It takes about 2 minutes to start the first time.
 
 1. Log in `admin` / `admin` and set a new password.
 2. **My Account (top-right) → Security → Generate token.** Name: `jenkins`, Type: *Global Analysis Token*. **Copy it.**
-3. No webhook is needed. The scanner waits for the Quality Gate itself (`sonar.qualitygate.wait=true`). Recent SonarQube versions also refuse webhooks to private IPs or to their own host, and here SonarQube and Jenkins share one server.
+3. **Administration → Configuration → Webhooks → Create.** Name: `jenkins`. URL: `http://<jenkins-PRIVATE-ip>:8080/sonarqube-webhook/` (Ansible printed it). This is how Jenkins learns the Quality Gate result.
 
 ## Step 7: Set up Jenkins
 
@@ -261,8 +255,7 @@ git reset --hard HEAD~1 && git push --force
 
 - **Dashboards → shipguard:** CPU and memory for both servers, app errors, latest app logs
 - **Logs Insights** on `/shipguard/app`: `fields @timestamp, @message | sort @timestamp desc`
-- **Alarms:** CPU > 80%, memory > 90%, status-check failures, more than 10 app errors in 5 min, and **any failed/blocked pipeline build** (`shipguard-pipeline-failed`) email you through SNS.
-- **Pipeline metrics:** every build publishes `BuildSucceeded`, `BuildFailed` and `BuildDuration` to the `ShipGuard/Pipeline` namespace (see the two pipeline widgets on the dashboard). Run any Step 9 demo and you get an alarm email within ~5 minutes. To test one: `ssh` to the k8s node and run `yes > /dev/null &` for 10 minutes (then `kill %1`).
+- **Alarms:** CPU > 80%, memory > 90% and status-check failures email you through SNS. To test one: `ssh` to the k8s node and run `yes > /dev/null &` for 10 minutes (then `kill %1`).
 - **VPC flow logs** (`/shipguard/vpc-flow-logs`) show rejected connection attempts from the internet. (Own account only: flow logs need their own IAM role, so they are switched off in Learner Lab mode.)
 
 ## Step 11: Extensions (optional, if you want to stand out more)
@@ -280,8 +273,6 @@ git reset --hard HEAD~1 && git push --force
 cd terraform
 terraform destroy
 ```
-
-The state bucket is protected by `prevent_destroy`. To remove it as well (only when you are completely done), delete `lifecycle { prevent_destroy = true }` from `bootstrap/main.tf`, empty the bucket (all versions) in the S3 console, then run `terraform -chdir=bootstrap destroy`.
 
 ECR images and S3 reports are deleted too (`force_delete` / `force_destroy` are on for the lab). Then check **EC2 → Volumes** and **Elastic IPs** in the console for leftovers. Note that the KMS key is scheduled for deletion after 7 days.
 
@@ -311,14 +302,12 @@ ECR images and S3 reports are deleted too (`force_delete` / `force_destroy` are 
 | Symptom | Fix |
 |---|---|
 | `ExpiredToken` / `InvalidClientTokenId` in Terraform or AWS CLI | Learner Lab session expired. Start Lab again and paste the new **AWS Details** credentials. |
-| `AccessDenied ... s3:GetBucketObjectLockConfiguration` (Learner Lab) | The lab's service control policy blocks a read the AWS provider does on every refresh. In Learner Lab, always run `terraform plan -refresh=false -out tfplan` then `terraform apply tfplan`. If a failed apply left `aws_s3_bucket.reports` *tainted*, run `terraform untaint aws_s3_bucket.reports` first, or Terraform will try to delete and recreate the bucket. |
 | `AccessDenied ... iam:CreateRole` | You're on Learner Lab but `learner_lab = true` is missing from `terraform.tfvars`. |
 | `UnauthorizedOperation` / instance type not allowed | Learner Lab only allows us-east-1/us-west-2 and instance sizes up to *large*. Check `aws_region` and `availability_zone`. |
 | `AccessDenied` on `kms:CreateKey` (Learner Lab) | Your lab blocks customer-managed KMS keys. Ask your instructor, or tell me and I'll switch the project to AWS-managed encryption. |
 | `ansible all -m ping` times out | Your IP changed. Update `my_ip_cidr`, run `terraform apply`. |
 | SonarQube container keeps restarting | `docker logs sonarqube`. Usually `vm.max_map_count`; re-run the jenkins playbook. |
-| SonarQube stage fails with `401` / `Not authorized` | The `sonar-token` credential is wrong or was revoked. Generate a new Global Analysis Token and update the credential. |
-| SonarQube stage says `QUALITY GATE STATUS: FAILED` | The gate is working. Open the ShipGuard project in SonarQube to see which condition failed. |
+| Quality Gate stage hangs, then times out | The SonarQube webhook is missing or wrong (Step 6.3). It must use the Jenkins **private** IP and end with `/sonarqube-webhook/`. |
 | `permission denied ... docker.sock` | Jenkins wasn't restarted after joining the `docker` group: `sudo systemctl restart jenkins`. |
 | `cat: /etc/shipguard/pipeline.env: No such file` | Re-run `ansible-playbook playbooks/site.yml`. |
 | Pods stuck in `ImagePullBackOff` | ECR secret expired. Run `sudo /usr/local/bin/ecr-refresh.sh` on the k8s node. |

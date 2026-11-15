@@ -118,6 +118,9 @@ h2 { font-size: 22px; margin: 0; letter-spacing: -.01em; }
 .gate-card .rule { color: var(--muted); font-size: 12.5px; margin: 10px 0 12px; line-height: 1.4; }
 .gate-card .result { font-family: var(--mono); font-size: 12px; padding-top: 10px; border-top: 1px dashed var(--line-2); color: var(--signal); }
 .gate.warn .result { color: var(--amber); }
+.gate.skip .lamp { border-color: var(--line, #3a3f47); background: transparent; color: #8a9099; box-shadow: none; }
+.gate.skip .gate-card { opacity: .6; }
+.gate.skip .result { color: #8a9099; }
 
 /* ---------- panels ---------- */
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding-bottom: 56px; }
