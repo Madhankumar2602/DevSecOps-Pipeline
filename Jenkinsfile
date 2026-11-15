@@ -34,8 +34,14 @@ pipeline {
       steps {
         script {
           // Written by Ansible from Terraform outputs — no hard-coded account IDs or IPs here.
-          def cfg = readProperties text: sh(script: 'cat /etc/shipguard/pipeline.env', returnStdout: true)
-          cfg.each { k, v -> env."${k}" = v }
+          // Plain Groovy KEY=VALUE parsing (no plugin needed).
+          sh(script: 'cat /etc/shipguard/pipeline.env', returnStdout: true).readLines().each { line ->
+            line = line.trim()
+            if (line && !line.startsWith('#') && line.contains('=')) {
+              def i = line.indexOf('=')
+              env."${line.substring(0, i).trim()}" = line.substring(i + 1).trim()
+            }
+          }
           env.SHORT_SHA = sh(script: 'git rev-parse --short=12 HEAD', returnStdout: true).trim()
           env.IMAGE_TAG = "${env.BUILD_NUMBER}-${env.SHORT_SHA}"
           env.IMAGE     = "${env.ECR_REPOSITORY_URL}:${env.IMAGE_TAG}"

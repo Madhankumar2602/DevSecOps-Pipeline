@@ -159,6 +159,17 @@
       changed_when: "'Downloaded' in plugins.stdout or 'Done' in plugins.stdout"
       notify: Restart Jenkins
 
+    # A .jpi with no unpacked folder means Jenkins hasn't loaded that plugin yet -> restart.
+    # (The plugin manager's output isn't a reliable "changed" signal.)
+    - name: Detect plugins Jenkins has not loaded yet
+      ansible.builtin.shell: |
+        for f in /var/lib/jenkins/plugins/*.jpi; do
+          [ -d "${f%.jpi}" ] || echo "$(basename "$f")"
+        done
+      register: unloaded_plugins
+      changed_when: unloaded_plugins.stdout | length > 0
+      notify: Restart Jenkins
+
     # ---------- SonarQube ----------
     - name: Run SonarQube (Community) in Docker
       ansible.builtin.shell: |
